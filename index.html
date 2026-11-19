@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="0">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title> The Weave of Voices · SDG 5 Gender Equality </title>
+  <meta name="description" content="Assignment 1">
+  <script>document.documentElement.classList.add('js');</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Prata&family=Zhi+Mang+Xing&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="js/p5.js"></script>
+  <script src="js/addons/p5.sound.min.js"></script>
+</head>
+<body class="is-loading">
+
+  <!-- ================= LOADING SCREEN ================= -->
+  <div id="loader" role="status" aria-live="polite">
+    <div class="loader-inner">
+      <svg class="loader-silk" viewBox="0 0 400 24" aria-hidden="true">
+        <path d="M0 12 C50 0 100 24 150 12 S250 0 300 12 S370 22 400 12" fill="none" stroke="currentColor" stroke-width="1.4" pathLength="1"/>
+      </svg>
+      <p class="loader-label">Weaving the silk <span id="loader-pct">0</span>%</p>
+    </div>
+  </div>
+
+
+  <!-- The generative artwork (sketch.js moves its canvas in here). It is the fixed "ground" of the whole page. -->
+  <div id="art-mount" role="img" aria-label="Generative painting of flowing silk-like waves, lotus leaves and flowers. It is different on every visit."></div>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="silk" viewBox="0 0 400 24">
+      <path d="M0 12 C50 0 100 24 150 12 S250 0 300 12 S370 22 400 12" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M0 14 C60 4 110 24 170 13 S260 3 310 13 S375 20 400 14" fill="none" stroke="currentColor" stroke-width="1" opacity=".6"/>
+      <path d="M0 10 C40 18 120 2 160 11 S270 20 320 10 S380 4 400 10" fill="none" stroke="currentColor" stroke-width=".8" opacity=".4"/>
+    </symbol>
+  </svg>
+
+  <!-- ================= LANDING PAGE ================= -->
+  <header class="hero" id="top">
+    <div class="stage">
+      <div class="layer bg" aria-hidden="true"></div>
+      <h1 class="layer title" id="title-layer">
+        <span class="title-box">
+          <img class="title-bg" src="assets/asset-1.svg" alt="" aria-hidden="true">
+          <span class="title-en zhi-mang-xing-regular" lang="en">
+            <span class="title-l1">The Weave<img class="title-zh" src="assets/asset-2.svg" alt="聲音的交織" lang="zh-Hant"></span>
+            <span class="title-l2">of Voices</span>
+          </span>
+        </span>
+      </h1>
+      <img class="layer wave" data-y0="0.05" data-yf="-0.60" src="assets/wave-1-ext.png" alt="" aria-hidden="true">
+      <img class="layer wave" data-y0="0.12" data-yf="-0.80" src="assets/wave-2-ext.png" alt="" aria-hidden="true">
+      <img class="layer wave" data-y0="0.15" data-yf="-1.10" src="assets/wave-3-ext.png" alt="" aria-hidden="true">
+    </div>
+  </header>
+
+  <!-- ================= ARTWORK PAGE ================= -->
+  <section class="art-page" id="art" aria-hidden="true"></section>
+
+  <!-- ================= STORY: ink-wash parallax layers behind the text =================
+       mountain (SDG) > path (quote + paragraph) > cloud (about the art) > silk (credits).
+       Each .pl wrapper is placed by CSS; js/parallax.js moves the <img> inside it at its own speed. -->
+  <div class="story">
+    <!-- Mountain-mist ridge: the paper edge, right after the artwork; the mountain image sits below it -->
+    <svg class="ridge" viewBox="0 0 1200 140" preserveAspectRatio="none" aria-hidden="true">
+      <path class="back" d="M0 140V70C80 40 140 10 230 34S350 96 450 72 590 8 690 22 820 92 920 66 1080 18 1200 52V140Z"/>
+      <path class="front" d="M0 140V100C110 74 170 50 280 74S430 120 540 98 700 48 800 66 960 116 1060 96 1160 70 1200 78V140Z"/>
+    </svg>
+    <div class="paper" aria-hidden="true"></div>
+
+  <main class="scroll">
+
+    <!-- ================= SDG ================= -->
+    <section class="sheet" id="sdg">
+      <div class="pl pl-mountain" data-mode="enter" data-speed="0.08" aria-hidden="true"><img src="assets/mountain.png" alt=""></div>
+      <div class="wrap sdg-layout rv">
+        <img class="sdg-badge" src="assets/sdg5.png" alt="Sustainable Development Goal 5">
+
+        <div class="sdg-label">
+          <p>SUSTAINABLE<br>DEVELOPMENT<br>GOAL 5</p>
+          <img src="assets/asset-4.png" alt="" aria-hidden="true">
+        </div>
+
+        <h2 class="sdg-title zhi-mang-xing-regular"><span class="sdg-title-gender">Gender</span><span class="sdg-title-equality">Equality</span></h2>
+
+        <div class="sdg-copy">
+          <p class="big">Achieve gender equality and<br>empower all women and girls.</p>
+          <p><a class="link" href="https://sdgs.un.org/goals/goal5" target="_blank" rel="noopener">Official United Nations description →</a></p>
+        </div>
+
+        <img class="sdg-ornament sdg-ornament-left" src="assets/asset-3.png" alt="" aria-hidden="true">
+        <img class="sdg-ornament sdg-ornament-right" src="assets/asset-3.png" alt="" aria-hidden="true">
+      </div>
+    </section>
+
+
+    <!-- ================= QUOTE ================= -->
+    <section class="sheet" id="quote">
+      <div class="pl pl-path" data-mode="enter" data-speed="0.10" aria-hidden="true"><img src="assets/path.png" alt=""></div>
+      <figure class="wrap quote rv">
+        <div class="quote-label">
+          <p>QUOTE</p>
+          <img src="assets/asset-5.png" alt="" aria-hidden="true">
+        </div>
+        <blockquote>
+          <p class="quote-line quote-line-left">“ The central question of</p>
+          <p class="quote-line quote-line-center">gender equality</p>
+          <p class="quote-line quote-line-right">is the question of power.”</p>
+        </blockquote>
+        <figcaption>
+          <strong>António Guterres</strong>, Secretary-General<br>
+          of the United Nations<br>
+          <span class="quote-event">CSW63 civil society town hall, United <br>Nations, New York, 12 March 2019</span><br>
+          <a class="link" href="https://www.un.org/sg/en" target="_blank" rel="noopener">Context →</a>
+        </figcaption>
+      </figure>
+    </section>
+
+
+    <!-- ================= PARAGRAPH + CALL TO ACTION ================= -->
+    <section class="sheet" id="power">
+      <div class="wrap narrow rv">
+        <div class="power-label">
+          <p>WHY THIS IS THE<br>QUESTION OF POWER</p>
+          <img src="assets/asset-6.png" alt="" aria-hidden="true">
+        </div>
+        <div class="power-grid">
+          <p class="essay">For millennia, women have been constrained by oppressive customs, restrictive laws and disproportionate social expectations. Central to this subordination is the enduring construction of women as the “weaker sex”, fragile and in need of protection, a notion that paradoxically legitimised male control. Although the expansion of human rights discourse has since given women greater scope for advocacy, a structural imbalance persists: power in parliaments, corporate boardrooms and most decision-making spaces remains predominantly male.</p>
+          <p class="essay"><strong>This imbalance illustrates why the central question of gender equality is, at its core, a question of power: who holds it, who is excluded from it, and who has the authority to redistribute it.</strong> Substantive change therefore requires not only the efforts of those seeking access, but also the cooperation of those who already hold power. Accordingly, contemporary feminism depends on the engagement of progressive men willing to cede decision-making space and use their influence to amplify women’s voices. Gender equality, the core objective of SDG 5, should thus be understood not as a women’s issue but as a collective societal responsibility. Hence the call to action:</p>
+          <p class="power-callout zhi-mang-xing-regular" aria-label="Call to action"><span>"Pass the mic.</span><span>Nominate a woman.</span><span>Change who decides."</span></p>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ================= ARTWORK CONCEPT ================= -->
+    <section class="sheet" id="silk">
+      <div class="pl pl-cloud" data-mode="center" data-speed="0.30" aria-hidden="true"><img src="assets/cloud.png" alt=""></div>
+      <div class="wrap artwork-layout rv">
+        <div class="artwork-label">
+          <p>ABOUT THE<br>ARTWORK</p>
+          <img src="assets/asset-7.png" alt="" aria-hidden="true">
+        </div>
+
+        <h2 class="artwork-title zhi-mang-xing-regular">
+          <span class="artwork-title-weave">The Weave</span>
+          <span class="artwork-title-voices">of Voices</span>
+        </h2>
+
+        <div class="artwork-cards">
+          <div class="artwork-card artwork-subcall">
+            <img src="assets/asset-8.png" alt="" aria-hidden="true">
+            <div class="artwork-card-content">
+              <h3>Sub-Call to action</h3>
+              <p>"Use your voice to lift another."</p>
+            </div>
+          </div>
+
+          <div class="artwork-card artwork-inspiration">
+            <img src="assets/asset-8.png" alt="" aria-hidden="true">
+            <div class="artwork-card-content">
+              <h3>Inspiration</h3>
+              <blockquote lang="vi">Thân em như tấm lụa đào<br>Phất phơ giữa chợ biết vào tay ai?</blockquote>
+              <p class="artwork-translation">“My self is like a bolt of pink silk, fluttering in the marketplace — into whose hands will it fall?”</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="artwork-copy">
+          <p>Based on this sub-call to action and inspired by this Vietnamese folk verse, the generative artwork reimagines silk, once a metaphor for women's vulnerability and lack of agency under patriarchy, as a symbol of collective empowerment.</p>
+          <p>Each thread represents an individual voice, retaining its identity as it intertwines with others to form something stronger. Through this weaving, the artwork celebrates solidarity as a way for women to reclaim their agency and uplift one another.</p>
+        </div>
+        <p><button class="btn" type="button" id="reweave">Weave a new silk</button></p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ================= CREDITS ================= -->
+  <footer class="credits" id="credits">
+    <div class="pl pl-silk" data-mode="end" data-speed="0.18" aria-hidden="true"><img src="assets/silk.png" alt=""></div>
+    <div class="wrap">
+      <p class="kicker">Credits</p>
+      <dl>
+        <div><dt>Name</dt><dd>Nguyen Hoang Tue Minh</dd></div>
+        <div><dt>Group name</dt><dd>Ten nhom la gi day?</dd></div>
+        <div><dt>Group members</dt><dd>Nguyen Tuong Lam · Phan Le Phuong Uyen · Nguyen Huynh Hanh Nhi · Phan Minh Nghia</dd></div>
+        <div><dt>Course</dt><dd>COMM2754 | Digital Media Specialisation 1 | 26t3</dd></div>
+        <div><dt>Affiliation</dt><dd>RMIT University Vietnam, Saigon South Campus, School of Communication and Design, Digital Media Program</dd></div>
+        <div><dt>Date</dt><dd><time id="today" datetime="2026-11-15">15 November 2026</time></dd></div>
+      </dl>
+    </div>
+  </footer>
+  </div><!-- /.story -->
+
+  <script src="sketch.js"></script>
+  <script src="js/site.js"></script>
+  <script src="js/landing.js"></script>
+  <script src="js/parallax.js"></script>
+</body>
+</html>
