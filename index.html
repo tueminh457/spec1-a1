@@ -10,8 +10,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Prata&family=Zhi+Mang+Xing&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
-  <script src="js/p5.js"></script>
-  <script src="js/addons/p5.sound.min.js"></script>
+  <script defer src="js/p5.js"></script>
+  <script defer src="js/addons/p5.sound.min.js"></script>
 </head>
 <body class="is-loading">
 
@@ -57,13 +57,15 @@
   </header>
 
   <!-- ================= ARTWORK PAGE ================= -->
-  <section class="art-page" id="art" aria-hidden="true"></section>
+  <section class="art-page" id="art" aria-label="The generative artwork">
+    <div class="art-actions">
+      <button class="btn btn-art weave-btn" type="button" id="reweave-art">Weave a new silk</button>
+    </div>
+  </section>
 
-  <!-- ================= STORY: ink-wash parallax layers behind the text =================
-       mountain (SDG) > path (quote + paragraph) > cloud (about the art) > silk (credits).
-       Each .pl wrapper is placed by CSS; js/parallax.js moves the <img> inside it at its own speed. -->
+  <!-- ================= STORY ================= -->
   <div class="story">
-    <!-- Mountain-mist ridge: the paper edge, right after the artwork; the mountain image sits below it -->
+    <!-- Mountain-mist ridge -->
     <svg class="ridge" viewBox="0 0 1200 140" preserveAspectRatio="none" aria-hidden="true">
       <path class="back" d="M0 140V70C80 40 140 10 230 34S350 96 450 72 590 8 690 22 820 92 920 66 1080 18 1200 52V140Z"/>
       <path class="front" d="M0 140V100C110 74 170 50 280 74S430 120 540 98 700 48 800 66 960 116 1060 96 1160 70 1200 78V140Z"/>
@@ -172,7 +174,6 @@
           <p>Based on this sub-call to action and inspired by this Vietnamese folk verse, the generative artwork reimagines silk, once a metaphor for women's vulnerability and lack of agency under patriarchy, as a symbol of collective empowerment.</p>
           <p>Each thread represents an individual voice, retaining its identity as it intertwines with others to form something stronger. Through this weaving, the artwork celebrates solidarity as a way for women to reclaim their agency and uplift one another.</p>
         </div>
-        <p><button class="btn" type="button" id="reweave">Weave a new silk</button></p>
       </div>
     </section>
 
@@ -195,9 +196,9 @@
   </footer>
   </div><!-- /.story -->
 
-  <script src="sketch.js"></script>
-  <script src="js/site.js"></script>
-  <script src="js/landing.js"></script>
-  <script src="js/parallax.js"></script>
+  <script defer src="sketch.js"></script>
+  <script defer src="js/site.js"></script>
+  <script defer src="js/landing.js"></script>
+  <script defer src="js/parallax.js"></script>
 </body>
 </html>

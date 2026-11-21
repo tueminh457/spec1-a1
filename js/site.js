@@ -8,9 +8,21 @@
     t.setAttribute('datetime', d.toISOString().slice(0, 10));
   }
 
-  // each new visit paints a new cloth, so "weave" simply reloads the page
-  const b = document.getElementById('reweave');
-  if (b) { b.addEventListener('click', () => location.reload()); }
+  // "Weave a new silk" repaints only the artwork (sketch.js: rbWeaveNew), the page is not reloaded
+  const weaveBtns = Array.from(document.querySelectorAll('.weave-btn'));
+  const setWeaving = on => weaveBtns.forEach(b => {
+    if (on) { b.dataset.label = b.textContent; b.textContent = 'Weaving\u2026'; } else if (b.dataset.label) { b.textContent = b.dataset.label; }
+    b.disabled = on;
+  });
+  const weave = () => {
+    if (typeof window.rbWeaveNew !== 'function') { location.reload(); return; }   // fallback if the sketch is not running
+    if (!window.rbWeaveNew()) { return; }                                          // ignored while a painting is still being built
+    setWeaving(true);
+    const art = document.getElementById('art');
+    if (art) { art.scrollIntoView({ behavior: 'smooth', block: 'start' }); }       // the button in the credits also takes you to the art
+  };
+  weaveBtns.forEach(b => b.addEventListener('click', weave));
+  window.addEventListener('art:ready', () => setWeaving(false));
 
   // gentle fade-up for content blocks
   const items = document.querySelectorAll('.rv');

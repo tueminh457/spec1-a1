@@ -6,6 +6,10 @@
 //   - I sketched the drawing and wrote the brief for this piece.
 //   - I decided on the three palettes (aqua, antique rose + celadon, antique blue + blush) in a Shan Shui style.
 //   - I asked for each change over many rounds (smoother bends, background waves, leaf groups, edge leaves, palettes) and tested every version in the p5.js web editor.
+//   - I asked for the animation (strokes on the main wave appear gradually, layer on top of each other, and a new pattern on every refresh); Claude wrote the recording and playback code for it.
+//   - I asked for the background to fade in gradually along the ribbon; Claude wrote the mask and timing code, which I tested and tuned.
+//   - I asked for the sketch to load faster without changing how the art looks; Claude made the speed changes (brush set-up, resize handling, delayed first build), which I checked.
+//   - I asked for the painting to be embedded in my webpage; Claude wrote the small WEBPAGE hooks listed below, which I tested in the browser.
 //   - I picked which versions to keep, tuned the settings, and edited and commented the code.
 // Claude's output was not used without checking.
 // Reference list entry:
@@ -14,12 +18,24 @@
 // Author: Nguyen Hoang Tue Minh, s4183536 - COMM2754 Assignment 1
 //
 // WEBPAGE HOOKS (the only changes made to embed the art in index.html - search for "WEBPAGE"):
-//   - the canvas is painted once at 1920 px wide (RB_RENDER_W) and CSS scales it, so resizing never repaints
+//   - the canvas is painted once at 1920 x 1080 (RB_RENDER_W) and CSS scales it, so resizing never repaints (windowResized is removed)
+//   - the pixel density is fixed at 1, because the canvas is already 1920 px wide (RB_MAX_DPR = 1)
 //   - the canvas is moved into <div id="art-mount">, and <html data-theme="0|1|2"> tells the CSS which palette is active
-//   - the first draw is deferred a moment so the page text paints before the (slow) painting starts
-//   - <body> gets the class "art-ready" when the painting is finished (the CSS fades the canvas in)
+//   - the first draw is deferred a moment so the page text paints before the (slow) build starts (rbWait in draw)
+//   - the animation redraws at 30 fps with a smaller painting budget per frame (RB_FPS, RB_FRAME_MS) so the page stays scrollable while it plays
+//   - the layers overlap more and the glaze and flowers are added while the wave is almost finished, not after it (RB_STROKES_END, RB_GLAZE_AT, RB_FINISH_FROM/TO)
+//   - while the visitor scrolls, the animation paints only small strokes; the big steps (shading, glaze, flowers) wait until scrolling pauses (rbScrolling)
+//   - the bank shading is split into small tasks and the almost transparent shading strokes are not blurred (RB_SHADE_SOFT)
+//   - p5 is started as soon as the page structure is ready, not after all images have downloaded (rbEarlyStart at the end of this file)
+//   - the leaf fit check runs its cheap tests before its slow one (same result, less time)
+//   - window.rbWeaveNew() repaints only the artwork with a new seed and palette (the "Weave a new silk" buttons)
+//   - blurred brush strokes are blurred on a small scratch canvas instead of the whole clipped area (RB_FAST_BLUR; rbScratchOpen)
+//   - adding ?timing to the page address prints how long each build step takes (RB_TIMING)
+//   - the animation starts only once the art is visible (the landing page hides it until the visitor scrolls), see rbWaitForArt
+//   - <body> gets the class "art-ready" when the build is finished and the painting starts to appear (the CSS fades the canvas in
+//     and the loading screen waits for this class)
 //
-// Layout of this file: settings, palettes, helpers, ribbon, brush and paint layers, background, background waves, shading, leaves, flowers, p5 setup and draw.
+// Layout of this file: settings, palettes, helpers, ribbon, brush and paint layers, background, background waves, shading, leaves, flowers, animation, p5 setup and draw.
 
 let rbSeed = Math.floor(Math.random() * 1e6);
 const RB_FORCE_THEME = -1;
@@ -50,6 +66,36 @@ const RB_STREAKS = 0.5;
 const RB_GRAIN   = 0;
 const RB_GAP     = 40;     // min gap between two parts of the ribbon that pass near each other
 
+// speed: highest pixel density used for the hidden painting layer.
+// WEBPAGE: 1, because the canvas is already rendered at 1920 px wide and CSS scales it.
+const RB_MAX_DPR = 1;
+
+// animation: the ribbon is painted stroke by stroke
+const RB_ANIM         = 1;         // 0 shows the finished picture at once
+const RB_ANIM_SECONDS = [10, 16];  // how long the ribbon takes to paint (random per load)
+const RB_LEAF_ANIM    = 0;         // 1 also grows the leaves and their flowers; 0 paints them at once
+const RB_FRAME_MS     = 8;         // max milliseconds spent painting per frame (WEBPAGE: was 14; a smaller share leaves the browser time to scroll)
+// WEBPAGE: the whole painting now finishes inside the painting time instead of running past it.
+// The stroke layers (the last ones are the shading texture) overlap more and end at RB_STROKES_END, then the glaze and the
+// flowers are added one after another while the wave is almost finished. The flowers must come after the last strokes,
+// otherwise those strokes would paint over them. Times are shares of the painting time (RB_ANIM_SECONDS).
+const RB_STROKES_END  = 0.85;      // the last wave and texture strokes end here
+const RB_GLAZE_AT     = 0.86;      // the soft colour glaze
+const RB_FINISH_FROM  = 0.88;      // the ribbon flowers appear one after another between these two times
+const RB_FINISH_TO    = 0.98;
+const RB_SCROLL_MS    = 3;         // WEBPAGE: painting budget per frame while the visitor is scrolling
+const RB_SCROLL_IDLE_MS = 160;     // WEBPAGE: scrolling counts as stopped after this many ms without a scroll event
+const RB_FPS          = 30;        // WEBPAGE: the animation redraws 30 times a second, not 60, so page scrolling stays smooth
+
+// animation of the background: it fades in along the ribbon
+const RB_BG_ANIM   = 1;     // 0 shows the background at once
+const RB_BG_FADE   = 0.25;  // how long each spot takes to fade in (share of the background time)
+const RB_BG_SPEED  = 0.3;   // background takes this share of the ribbon's paint time (smaller = faster)
+const RB_BG_HEAD   = 1.0;   // ribbon starts when this share of the background time has passed (1 = after, 0.8 = slight overlap)
+const RB_BG_LAG    = 0.28;  // how much distance from the ribbon delays a spot (0 = pure thread order)
+const RB_BG_LAGPX  = 450;   // distance (px) at which that delay is at its maximum
+const RB_BG_RIBBON_PAD = 8; // the ribbon plus this margin is never hidden
+
 // background waves
 const WV_ON    = 1;
 const WV_REACH = 1000;
@@ -73,6 +119,9 @@ const RB_SHADE_IRID   = 0.1;
 const RB_SHADE_RIPPLE = 0;
 const RB_SHADE_BODY   = 0.2;
 const RB_SHADE_DROP   = 1.0;
+// WEBPAGE: the shading strokes are almost transparent (alpha about 0.005), so blurring each one is invisible but very slow.
+// 0 = no blur on them (fast), 1 = blur as before.
+const RB_SHADE_SOFT   = 0;
 const RB_LIGHT = [-0.55, -0.83];   // direction toward the light (upper left)
 
 // background colour
@@ -614,7 +663,11 @@ function rbBuild() {
 }
 
 // ---- bristle brush ----
+// While the animation is being recorded (rbRecording), a stroke is queued instead of drawn.
+// Speed: the values that only depend on the point (normal, width, taper, dry-gap chance) are worked out once
+// per stroke and shared by all bristles. The random numbers are used in the same order as before.
 function rbBrush(pts, wv, col, a, o) {
+  if (rbRecording) { rbRecordStroke(pts, wv, col, a, o); return; }
   o = o || {};
   const c = rbCtx, n = pts.length;
   if (n < 2) return;
@@ -624,49 +677,120 @@ function rbBrush(pts, wv, col, a, o) {
   avg /= n;
   const k = Math.max(2, Math.min(12, Math.round(avg / 2.2)));
   const dry = (o.dry === undefined ? 0.06 : o.dry) * RB_DRY;
-  const nx = [], ny = [];
+  // per-point values shared by all bristles: normals, width, taper, dry-gap chance
+  const nx = [], ny = [], wa = [], tw = [], thr = [];
   for (let i = 0; i < n; i++) {
     const p = pts[Math.max(i - 1, 0)], q = pts[Math.min(i + 1, n - 1)];
-    const dx = q[0] - p[0], dy = q[1] - p[1], m = Math.hypot(dx, dy) || 1;
+    const dx = q[0] - p[0], dy = q[1] - p[1], m = Math.hypot(dx, dy) || 1, t = i / (n - 1);
     nx.push(-dy / m); ny.push(dx / m);
+    wa.push(wAt(i));
+    tw.push(o.taper ? Math.pow(Math.sin(Math.PI * rbCl(t, 0.04, 0.96)), o.taper) : 1);
+    thr.push(dry * (0.2 + 0.9 * t) * 0.3);
   }
   c.globalCompositeOperation = o.mode || 'source-over';
   c.lineCap = 'round';
   c.lineJoin = 'round';
-  rbRepeat(k, q => {
-    const off = q / (k - 1) - 0.5;
-    if (o.col2) {
-      const c1 = rbTint(col, o.jit === undefined ? 6 : o.jit), c2 = rbTint(o.col2, o.jit === undefined ? 6 : o.jit), aa = a * rbR(0.55, 1);
-      const g = c.createLinearGradient(pts[0][0], pts[0][1], pts[n - 1][0], pts[n - 1][1]);
-      g.addColorStop(0, rbRgba(c1, aa));
-      g.addColorStop(1, rbRgba(c2, aa));
-      c.strokeStyle = g;
-    } else {
-      c.strokeStyle = rbRgba(rbTint(col, o.jit === undefined ? 6 : o.jit), a * rbR(0.55, 1));
-    }
-    c.lineWidth = Math.max(0.6, (avg / k) * 1.7);
-    c.beginPath();
-    if (o.smooth) { rbSmoothBristle(pts, nx, ny, wAt, off, o.taper); } else {
-      let pen = false;
-      for (let i = 0; i < n; i++) {
-        const t = i / (n - 1);
-        const tw = o.taper ? Math.pow(Math.sin(Math.PI * rbCl(t, 0.04, 0.96)), o.taper) : 1;
-        const o2 = off * wAt(i) * tw * (1 + 0.08 * Math.sin(i * 1.3 + q * 2.1));
-        const x = pts[i][0] + nx[i] * o2, y = pts[i][1] + ny[i] * o2;
-        if (rbRnd() < dry * (0.2 + 0.9 * t) * 0.3) { pen = false; continue; }
-        if (!pen) { c.moveTo(x, y); pen = true; } else { c.lineTo(x, y); }
+  const lw = Math.max(0.6, (avg / k) * 1.7);
+  // WEBPAGE speed: when the strokes are blurred, each bristle is blurred on a small scratch canvas that only covers
+  // the stroke and is then copied onto the painting, instead of making the browser blur the whole clipped area for every bristle.
+  let S = null;
+  if (rbBlurPx > 0 && RB_FAST_BLUR) {
+    let mw = 0;
+    for (let i = 0; i < n; i++) { mw = Math.max(mw, wa[i]); }
+    S = rbScratchOpen(c, pts, mw * 0.55 + lw);
+  }
+  const tc = S ? S.ctx : c;
+  try {
+    rbRepeat(k, q => {
+      const off = q / (k - 1) - 0.5;
+      if (S) { rbScratchClear(S); }
+      if (o.col2) {
+        const c1 = rbTint(col, o.jit === undefined ? 6 : o.jit), c2 = rbTint(o.col2, o.jit === undefined ? 6 : o.jit), aa = a * rbR(0.55, 1);
+        const g = tc.createLinearGradient(pts[0][0], pts[0][1], pts[n - 1][0], pts[n - 1][1]);
+        g.addColorStop(0, rbRgba(c1, aa));
+        g.addColorStop(1, rbRgba(c2, aa));
+        tc.strokeStyle = g;
+      } else {
+        tc.strokeStyle = rbRgba(rbTint(col, o.jit === undefined ? 6 : o.jit), a * rbR(0.55, 1));
       }
-    }
-    c.stroke();
-  });
+      tc.lineWidth = lw;
+      tc.beginPath();
+      if (o.smooth) { rbSmoothBristle(tc, pts, nx, ny, wa, tw, off); } else {
+        let pen = false;
+        for (let i = 0; i < n; i++) {
+          const o2 = off * wa[i] * tw[i] * (1 + 0.08 * Math.sin(i * 1.3 + q * 2.1));
+          const x = pts[i][0] + nx[i] * o2, y = pts[i][1] + ny[i] * o2;
+          if (rbRnd() < thr[i]) { pen = false; continue; }
+          if (!pen) { tc.moveTo(x, y); pen = true; } else { tc.lineTo(x, y); }
+        }
+      }
+      tc.stroke();
+      if (S) { rbScratchPut(c, S); }
+    });
+  } finally {
+    if (S) { rbScratchClose(S); }
+  }
+}
+// ---- scratch canvas for blurred bristles (WEBPAGE speed) ----
+// The scratch canvas has the same transform as the painting, shifted by a whole number of pixels, so a bristle is drawn
+// with exactly the same geometry. It is blurred there with the same blur as before, then copied to the painting 1:1
+// (same clip, same blend mode, same opacity). RB_FAST_BLUR = 0 switches this off and blurs on the painting as before.
+const RB_FAST_BLUR = 1;
+let rbBlurPx = 0;     // blur radius (canvas pixels) of the enclosing rbBlurred, 0 = none
+let rbSB = null;      // the shared scratch canvas
+function rbScratchOpen(c, pts, ext) {
+  const m = c.getTransform(), cw = c.canvas.width, ch = c.canvas.height;
+  if (!m || m.b !== 0 || m.c !== 0 || m.a <= 0 || m.d <= 0) { return null; }   // unusual transform: blur on the painting as before
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (let i = 0; i < pts.length; i++) {
+    x0 = Math.min(x0, pts[i][0]); x1 = Math.max(x1, pts[i][0]);
+    y0 = Math.min(y0, pts[i][1]); y1 = Math.max(y1, pts[i][1]);
+  }
+  const pad = Math.ceil(3.5 * rbBlurPx) + 3;
+  let ox = Math.floor((x0 - ext) * m.a + m.e - pad), oy = Math.floor((y0 - ext) * m.d + m.f - pad);
+  let ex = Math.ceil((x1 + ext) * m.a + m.e + pad), ey = Math.ceil((y1 + ext) * m.d + m.f + pad);
+  ox = Math.max(0, ox); oy = Math.max(0, oy); ex = Math.min(cw, ex); ey = Math.min(ch, ey);
+  if (ex <= ox || ey <= oy) { ox = 0; oy = 0; ex = 1; ey = 1; }   // nothing of this stroke is on the canvas
+  const w = ex - ox, h = ey - oy;
+  if (w * h > 1400 * 1000) { return null; }                       // very large stroke: blur it on the painting as before
+  if (!rbSB || rbSB.cv.width !== cw || rbSB.cv.height !== ch) {
+    const cv = document.createElement('canvas');
+    cv.width = cw; cv.height = ch;
+    rbSB = { cv, ctx: cv.getContext('2d') };
+  }
+  const sc = rbSB.ctx;
+  const S = { ctx: sc, cv: rbSB.cv, ox, oy, w, h, m, fs: 'blur(' + rbBlurPx.toFixed(2) + 'px)' };
+  sc.setTransform(1, 0, 0, 1, 0, 0);
+  sc.filter = 'none'; sc.globalAlpha = 1; sc.globalCompositeOperation = 'source-over';
+  sc.save();
+  sc.beginPath(); sc.rect(0, 0, w, h); sc.clip();                  // keeps the blurred area as small as the stroke
+  sc.setTransform(m.a, 0, 0, m.d, m.e - ox, m.f - oy);
+  sc.lineCap = 'round'; sc.lineJoin = 'round';
+  return S;
+}
+function rbScratchClear(S) {
+  const sc = S.ctx, m = S.m;
+  sc.setTransform(1, 0, 0, 1, 0, 0);
+  sc.filter = 'none';
+  sc.clearRect(0, 0, S.w, S.h);
+  sc.setTransform(m.a, 0, 0, m.d, m.e - S.ox, m.f - S.oy);
+  try { sc.filter = S.fs; } catch (e) { /* no filter support: stay crisp */ }
+}
+function rbScratchPut(c, S) {
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.filter = 'none';
+  c.drawImage(S.cv, 0, 0, S.w, S.h, S.ox, S.oy, S.w, S.h);
+  c.restore();
+}
+function rbScratchClose(S) {
+  S.ctx.restore();
+  S.ctx.filter = 'none';
 }
 // smooth bristle: no ripple, no gaps, curves through the midpoints
-function rbSmoothBristle(pts, nx, ny, wAt, off, taper) {
-  const c = rbCtx, n = pts.length;
-  const P = pts.map((p, i) => {
-    const t = i / (n - 1), tw = taper ? Math.pow(Math.sin(Math.PI * rbCl(t, 0.04, 0.96)), taper) : 1;
-    return [p[0] + nx[i] * off * wAt(i) * tw, p[1] + ny[i] * off * wAt(i) * tw];
-  });
+function rbSmoothBristle(c, pts, nx, ny, wa, tw, off) {
+  const n = pts.length;
+  const P = pts.map((p, i) => [p[0] + nx[i] * off * wa[i] * tw[i], p[1] + ny[i] * off * wa[i] * tw[i]]);
   c.moveTo(P[0][0], P[0][1]);
   for (let i = 1; i < n - 1; i++) {
     c.quadraticCurveTo(P[i][0], P[i][1], (P[i][0] + P[i + 1][0]) / 2, (P[i][1] + P[i + 1][1]) / 2);
@@ -992,11 +1116,20 @@ const rbIridAlpha = u => (TH.irAlpha ? TH.irAlpha(u) : rbCl(u < 0.1 ? 0.5 + 5 * 
 const rbLight = (col, t) => rbMix(col, [255, 255, 255], t);
 
 // runs fn with a canvas blur and restores the context afterwards
+// (while recording, it only remembers the blur for the stroke being queued)
 function rbBlurred(px, fn) {
-  const c = rbCtx;
+  if (rbRecording) {
+    const keep = rbBlurNow;
+    rbBlurNow = px;
+    try { fn(); } finally { rbBlurNow = keep; }
+    return;
+  }
+  const c = rbCtx, keepPx = rbBlurPx;
   c.save();
-  if (RB_BG_BLUR && px > 0) { try { c.filter = 'blur(' + (px * rbBL).toFixed(2) + 'px)'; } catch (e) { /* no filter support: stay crisp */ } }
-  try { fn(); } finally { c.restore(); }
+  if (RB_BG_BLUR && px > 0) {
+    try { c.filter = 'blur(' + (px * rbBL).toFixed(2) + 'px)'; rbBlurPx = px * rbBL; } catch (e) { /* no filter support: stay crisp */ }
+  }
+  try { fn(); } finally { rbBlurPx = keepPx; c.restore(); }
 }
 
 let rbFluid = null;
@@ -1347,24 +1480,25 @@ function rbDropShadow(sys, wd) {
     });
   });
 }
-function rbShadeBanks(sys, wd, lit, sd) {
-  const c = rbCtx, k = RB_SHADE;
-  const depth = (side, i, mult) => {
-    const facing = side > 0 ? -lit[i] : lit[i];
-    const wob = 0.7 + 0.6 * rbFbm(i * 0.015 + side * 7, sd + (side > 0 ? 1 : 2));
-    return rbCl(RB_SHADE_DEPTH * mult * (0.78 + 0.4 * facing) * wob, 0.03, 0.6);
-  };
+// WEBPAGE: the bank shading used to be one big task (seven large blurred fills in one frame, which froze the page).
+// It is now four small tasks, each on its own layer, so the work is spread over several frames. The look is the same.
+function rbBankDepth(lit, sd, side, i, mult) {
+  const facing = side > 0 ? -lit[i] : lit[i];
+  const wob = 0.7 + 0.6 * rbFbm(i * 0.015 + side * 7, sd + (side > 0 ? 1 : 2));
+  return rbCl(RB_SHADE_DEPTH * mult * (0.78 + 0.4 * facing) * wob, 0.03, 0.6);
+}
+function rbShadeBankLayer(sys, wd, lit, sd, mult, alpha) {
+  const c = rbCtx, sty = rbRgba(TH.bankShadow, alpha * RB_SHADE * 0.5);
   rbBlurred(8, () => {
     c.globalCompositeOperation = 'multiply';
-    [[1.0, 0.10], [0.62, 0.12], [0.32, 0.15]].forEach(([mult, alpha]) => {
-      const sty = rbRgba(TH.bankShadow, alpha * k * 0.5);
-      rbBandFill(sys, wd, () => 0, i => depth(-1, i, mult), sty);
-      rbBandFill(sys, wd, i => 1 - depth(1, i, mult), () => 1, sty);
-    });
+    rbBandFill(sys, wd, () => 0, i => rbBankDepth(lit, sd, -1, i, mult), sty);
+    rbBandFill(sys, wd, i => 1 - rbBankDepth(lit, sd, 1, i, mult), () => 1, sty);
   });
+}
+function rbShadeBankLight(sys, wd, lit) {
+  const c = rbCtx, sty = rbRgba(TH.bankLight, 0.16 * RB_SHADE);
   rbBlurred(2.5, () => {
     c.globalCompositeOperation = 'screen';
-    const sty = rbRgba(TH.bankLight, 0.16 * k);
     rbBandFill(sys, wd, i => (lit[i] > 0 ? 0.93 : 0.035), i => (lit[i] > 0 ? 0.985 : 0.09), sty);
   });
 }
@@ -1406,7 +1540,7 @@ function rbShadeStrokes(sys, wd, lit, sd) {
   const hueAt = (i, dv) => rbIrid(rbCl(0.12 + 0.7 * rbFbm(i * 0.004 + 3, sd + 8) + dv, 0, 1));
   const deep = (i, dv) => rbMix(TH.deep, rbMix(hueAt(i, dv), TH.deepIr, 0.35), ir);
   const pale = (i, dv) => rbMix(TH.pale, rbLight(hueAt(i, dv), 0.35), ir);
-  const pass = (count, shadow, mode, blur, lenLo, lenHi, wLo, wHi, aLo, aHi, reach, o) => rbBlurred(blur, () => {
+  const pass = (count, shadow, mode, blur, lenLo, lenHi, wLo, wHi, aLo, aHi, reach, o) => rbBlurred(blur * RB_SHADE_SOFT, () => {
     rbRepeat(count * 4, () => {
       const i = Math.floor(rbR(0, n));
       if (rbRnd() > (wd.hm[i] + wd.hp[i]) / maxTot) return;
@@ -1435,12 +1569,16 @@ function rbShadeStrokes(sys, wd, lit, sd) {
     });
   });
 }
+// the shading steps are more layers of the animation
 function rbShade(sys, wd) {
   if (RB_SHADE <= 0) return;
   const lit = rbLitArray(sys), sd = rbSeedInt();
-  rbTry('shade ripples', () => rbShadeRipples(sys, wd));
-  rbTry('shade banks',   () => rbShadeBanks(sys, wd, lit, sd));
-  rbTry('shade strokes', () => rbShadeStrokes(sys, wd, lit, sd));
+  rbStage(); rbTry('shade ripples', () => rbTask(() => rbShadeRipples(sys, wd), true));
+  [[1.0, 0.10], [0.62, 0.12], [0.32, 0.15]].forEach(([mult, alpha]) => {
+    rbStage(); rbTry('shade bank', () => rbTask(() => rbShadeBankLayer(sys, wd, lit, sd, mult, alpha), true));
+  });
+  rbStage(); rbTry('shade light',   () => rbTask(() => rbShadeBankLight(sys, wd, lit), true));
+  rbStage(); rbTry('shade strokes', () => rbShadeStrokes(sys, wd, lit, sd));
 }
 
 // ---- lotus leaves ----
@@ -1542,13 +1680,13 @@ function rbInRibbon(sys, wd, x, y, pad) {
 // a leaf can be used if it is unfolded, clear of the main wave, and not far off the canvas.
 // margin is how far past the canvas edge the leaf may reach
 function rbLeafFits(sys, wd, G, margin) {
-  if (rbLeafFolded(G.poly)) return false;
+  // WEBPAGE speed: the cheap checks run first and the slow fold check last. The answer is the same (no random numbers are used here).
   for (let k = 0; k < G.poly.length; k += 4) {
     const q = G.poly[k];
     if (q[0] < -margin || q[0] > RB_W + margin || q[1] < -margin || q[1] > RB_H + margin) return false;
     if (rbInRibbon(sys, wd, q[0], q[1], RB_LEAF_CLEAR)) return false;
   }
-  return true;
+  return !rbLeafFolded(G.poly);
 }
 // leaf whose stem starts at (x, y)
 function rbLeafMake(sys, x, y, L) {
@@ -1680,8 +1818,8 @@ function rbLeafLotuses(all) {
   const chosen = cand.filter(o => rbHash(o.k + 71, rbSeed) < RB_LEAF_LOTUS);
   cand.forEach(o => { if (chosen.length < Math.min(2, cand.length) && chosen.indexOf(o) < 0) chosen.push(o); });
   chosen.slice(0, RB_LEAF_LOTUS_MAX).forEach(o => {
-    const r = rbCl(o.G.hw * RB_LEAF_LOTUS_SIZE, 16, 34), shadow = rbHash(o.k + 91, rbSeed) < RB_LEAF_LOTUS_SHADOW;
-    rbTry('leaf lotus', () => rbLotus(o.p[0], o.p[1], r, rbR(0, 6.28), shadow));
+    const r = rbCl(o.G.hw * RB_LEAF_LOTUS_SIZE, 16, 34), shadow = rbHash(o.k + 91, rbSeed) < RB_LEAF_LOTUS_SHADOW, rot = rbR(0, 6.28);
+    rbTask(() => rbTry('leaf lotus', () => rbLotus(o.p[0], o.p[1], r, rot, shadow)), false, 'leaflotus');
   });
 }
 
@@ -1735,7 +1873,8 @@ function rbLeaves(sys, wd) {
     clusters.push({ mid: best.mid, R: best.L * 1.1 });
     group.forEach(G => all.push(G));
   });
-  all.forEach(G => rbTry('leaf', () => rbLeafPaint(G)));
+  // each leaf is queued, so the animation can grow them one at a time
+  all.forEach(G => rbTask(() => rbTry('leaf', () => rbLeafPaint(G)), false, 'leaf'));   // painted at once unless RB_LEAF_ANIM = 1
   rbTry('leaf lotuses', () => rbLeafLotuses(all));
 }
 
@@ -1795,72 +1934,292 @@ function rbLotus(x, y, r, rot, shadow) {
     c.fill();
   });
 }
+
+// ---- the ribbon, queued for the animation ----
 function rbPaintRibbon(sys, wd) {
-  const c = rbCtx, n = sys.n, poly = rbOutline(sys, wd, 0, 12, 0);
-  rbIsolated('drop shadow', 4, () => rbDropShadow(sys, wd));
-  c.save();   // everything below is painted inside the ribbon outline
-  rbPath(poly);
-  c.clip();
-  rbPath(poly);
-  c.fillStyle = rbRgba(TH.base, 0.9);
-  c.fill();
-  rbTry('base',       () => rbStrokes(sys, wd));
-  rbTry('patches',    () => rbPatches(sys, wd));
-  rbTry('flows',      () => rbFlows(sys, wd));
-  rbTry('accents',    () => rbAccents(sys, wd));
-  rbTry('dry',        () => rbDryStreaks(sys, wd));
-  rbTry('shadows',    () => rbShadows(sys, wd));
-  rbTry('highlights', () => rbHighlights(sys, wd));
-  rbTry('edges',      () => rbEdges(sys, wd));
+  const poly = rbOutline(sys, wd, 0, 12, 0);
+  rbClipPoly = poly;
+  rbTask(() => rbDropShadow(sys, wd), false);
+  rbRibbonBody(sys, wd, poly);
+  rbTask(rbGlaze, false, 'glaze');
+  if (RB_LOTUS > 0) { rbRibbonLotuses(sys, wd); }
+}
+// everything inside the ribbon outline: each step is one layer of the animation
+function rbRibbonBody(sys, wd, poly) {
+  const c = rbCtx;
+  rbTask(() => { rbPath(poly); c.fillStyle = rbRgba(TH.base, 0.9); c.fill(); }, true);
+  rbRecording = true;
+  [['base', rbStrokes], ['patches', rbPatches], ['flows', rbFlows], ['accents', rbAccents],
+   ['dry', rbDryStreaks], ['shadows', rbShadows], ['highlights', rbHighlights], ['edges', rbEdges]
+  ].forEach(s => { rbStage(); rbTry(s[0], () => s[1](sys, wd)); });
   rbIsolated('wave shading', 5, () => rbShade(sys, wd));
-  c.restore();
-  rbGlaze();
-  if (RB_LOTUS > 0) {
-    const span = sys.u1 - sys.u0;
-    [0.14, 0.34, 0.58, 0.84].forEach((u, fi) => {
-      const f = rbR(0.3, 0.7), r = rbR(18, 28), rot = rbR(0, 6.28);
-      const shadow = rbHash(fi + 11, rbSeed) < RB_LOTUS_SHADOW;
-      [0, 0.02, -0.02, 0.04, -0.04, 0.06, -0.06, 0.09, -0.09].some(d => {
-        const i = rbCl(Math.floor((sys.u0 + (u + d) * span) * (n - 1)), 0, n - 1);
-        const p = rbPos(sys, i, -wd.hm[i] + f * (wd.hm[i] + wd.hp[i]));
-        if (p[0] > 40 && p[0] < RB_W - 40 && p[1] > 40 && p[1] < RB_H - 40) { rbLotus(p[0], p[1], r, rot, shadow); return true; }
-        return false;
-      });
+  rbRecording = false;
+}
+function rbRibbonLotuses(sys, wd) {
+  const n = sys.n, span = sys.u1 - sys.u0;
+  [0.14, 0.34, 0.58, 0.84].forEach((u, fi) => {
+    const f = rbR(0.3, 0.7), r = rbR(18, 28), rot = rbR(0, 6.28);
+    const shadow = rbHash(fi + 11, rbSeed) < RB_LOTUS_SHADOW;
+    [0, 0.02, -0.02, 0.04, -0.04, 0.06, -0.06, 0.09, -0.09].some(d => {
+      const i = rbCl(Math.floor((sys.u0 + (u + d) * span) * (n - 1)), 0, n - 1);
+      const p = rbPos(sys, i, -wd.hm[i] + f * (wd.hm[i] + wd.hp[i]));
+      if (p[0] > 40 && p[0] < RB_W - 40 && p[1] > 40 && p[1] < RB_H - 40) {
+        rbTask(() => rbLotus(p[0], p[1], r, rot, shadow), false, 'lotus');
+        return true;
+      }
+      return false;
     });
-  }
+  });
 }
 function rbTry(name, fn) {
   try { return fn(); } catch (e) { console.error('ribbon step "' + name + '" failed:', e); }
 }
 
+// ---- animation ----
+// Painting steps are queued instead of drawn. rbPlan gives every queued stroke a time,
+// from a pattern picked by the seed, and rbPlay paints the strokes whose time has come.
+let rbRecording = false, rbBlurNow = 0, rbLayerNo = 0, rbQ = [], rbQi = 0;
+let rbAnim = null, rbAnimSys = null, rbClipPoly = null;
+
+const rbStage = () => { rbLayerNo++; };
+// queues a whole step (shading, glaze, a leaf...). clip = paint inside the ribbon outline
+function rbTask(fn, clip, final) {
+  if (!RB_LEAF_ANIM && (final === 'leaf' || final === 'leaflotus')) { rbTry('leaf now', fn); return; }   // leaves are not animated
+  rbQ.push({ kind: 1, clip: !!clip, layer: rbLayerNo, final: final || '', u: 0.5, run: fn });
+}
+// queues one brush stroke, with its position along the ribbon (0 to 1)
+function rbRecordStroke(pts, wv, col, a, o) {
+  if (pts.length < 2) return;
+  const blur = rbBlurNow, mid = pts[pts.length >> 1];
+  rbQ.push({ kind: 0, clip: true, layer: rbLayerNo, final: '', u: rbUAt(mid),
+             run: () => rbBlurred(blur, () => rbBrush(pts, wv, col, a, o)) });
+}
+function rbUAt(p) {
+  const s = rbAnimSys;
+  if (!s || !wvGrid) return 0.5;
+  const j = rbCl(wvOwner(p[0], p[1]), 0, s.n - 1) / (s.n - 1);
+  return rbCl((j - s.u0) / ((s.u1 - s.u0) || 1), 0, 1);
+}
+
+// a new pattern for every seed
+const rbRipple = (o, u) => o.reduce((m, p) => Math.min(m, Math.abs(u - p[0]) + p[1]), 9);
+function rbMakeAnim() {
+  const kind = rbPick(['sweep', 'bloom', 'ripples', 'braid', 'tide']);
+  const A = { kind, dur: rbR(RB_ANIM_SECONDS[0], RB_ANIM_SECONDS[1]), win: rbR(0.22, 0.5), ease: rbR(0.75, 1.5),
+              jit: rbR(0.01, 0.06), dir: rbRnd() < 0.5 ? 1 : -1, flip: rbRnd() < 0.5 ? 0 : 1,
+              k: rbR(1.5, 4), ph: rbR(0, 6.28), o: [], norm: 1, bgDur: 0, t0: 0 };
+  A.bgDur = RB_BG_ANIM ? A.dur * RB_BG_SPEED : 0;   // how long the background takes
+  A.t0 = A.bgDur * RB_BG_HEAD;                      // when the ribbon starts
+  if (kind === 'bloom') {
+    A.o = [[rbR(0.15, 0.85), 0]];
+    A.norm = Math.max(A.o[0][0], 1 - A.o[0][0]);
+  }
+  if (kind === 'ripples') {
+    A.o = rbRepeat(rbR(3, 5), () => [rbR(0, 1), rbR(0, 0.35)]);
+    A.norm = Math.max(0.05, ...Array.from({ length: 41 }, (_, s) => rbRipple(A.o, s / 40)));
+  }
+  return A;
+}
+// how far along its layer's reveal a stroke is (0 = first, 1 = last)
+function rbFront(A, u, l) {
+  switch (A.kind) {
+    case 'sweep':   return A.dir > 0 ? u : 1 - u;
+    case 'bloom':   return Math.abs(u - A.o[0][0]) / A.norm;
+    case 'ripples': return rbRipple(A.o, u) / A.norm;
+    case 'braid':   return (l + A.flip) % 2 ? u : 1 - u;
+    default:        return rbCl(0.75 * u + 0.25 * (0.5 + 0.5 * Math.sin(u * A.k * 6.283 + A.ph + l * 0.8)), 0, 1);
+  }
+}
+// glaze, lotuses and leaves have their own times
+function rbFinalTime(A, it, cnt, nLot) {
+  const k = cnt[it.final] = (cnt[it.final] || 0) + 1;
+  const from = A.dur * RB_FINISH_FROM, to = A.dur * RB_FINISH_TO;
+  if (it.final === 'glaze') return A.dur * RB_GLAZE_AT;
+  if (it.final === 'lotus') return from + (to - from) * (k - 1) / Math.max(1, nLot - 1);   // spread out, so no two flowers land in one frame
+  if (it.final === 'leaf')  return A.dur * rbR(0.4, 1);
+  return from + (to - from) * rbR(0, 1);
+}
+function rbSchedule(A) {
+  if (!RB_ANIM) { rbQ.forEach(it => { it.t = 0; }); return; }
+  const nL = Math.max(1, rbLayerNo), W = A.dur * A.win, cnt = {};
+  const nLot = rbQ.filter(it => it.final === 'lotus').length;
+  const span = rbCl((A.dur * RB_STROKES_END - W * (1 + A.jit)) / Math.max(0.01, A.dur - W), 0.3, 1);   // squeezes the layer starts so the last stroke ends at RB_STROKES_END
+  rbQ.forEach(it => {
+    if (it.final) { it.t = rbFinalTime(A, it, cnt, nLot); return; }
+    if (it.layer === 0) { it.t = 0; return; }
+    const start = nL > 1 ? (A.dur - W) * span * (it.layer - 1) / (nL - 1) : 0;
+    const f = it.kind === 1 ? 0.5 : Math.pow(rbFront(A, it.u, it.layer), A.ease);
+    it.t = Math.max(0, start + W * (f + A.jit * rbR(-1, 1)));
+  });
+  rbQ.forEach(it => { it.t += A.t0; });   // the ribbon waits for the background
+  rbQ.sort((a, b) => a.t - b.t);
+}
+function rbPlan() {
+  const keep = rbRS;
+  rbRS = (rbSeed * 2654435 + 977) | 0;
+  rbAnim = rbMakeAnim();
+  rbSchedule(rbAnim);
+  rbRS = keep;
+  console.log('animation: ' + rbAnim.kind + ', ' + rbAnim.dur.toFixed(1) + ' s');
+}
+
+// paints every queued item whose time has come (or until the frame budget runs out)
+function rbSwitchClip(on) {
+  const c = rbCtx;
+  if (on) { c.save(); rbPath(rbClipPoly); c.clip(); } else { c.restore(); }
+}
+// WEBPAGE: while the visitor is scrolling, the animation only paints small strokes, with a smaller budget.
+// The big steps (shading, glaze, flowers) wait until scrolling pauses, so scrolling never freezes.
+let rbScrollAt = -1e9;
+addEventListener('scroll', () => { rbScrollAt = performance.now(); }, { passive: true });
+const rbScrolling = () => performance.now() - rbScrollAt < RB_SCROLL_IDLE_MS;
+function rbPlay(t, budgetMs) {
+  const c = rbCtx, start = performance.now();
+  let clipped = false;
+  c.save();
+  c.scale(rbSC, rbSC);
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+  while (rbQi < rbQ.length && rbQ[rbQi].t <= t && performance.now() - start < budgetMs) {
+    if (rbScrolling() && (rbQ[rbQi].kind === 1 || rbQ[rbQi].final)) break;   // big step: wait for the scroll to stop
+    const it = rbQ[rbQi++];
+    if (it.clip !== clipped) { rbSwitchClip(it.clip); clipped = it.clip; }
+    c.save();
+    rbTry('play', it.run);
+    c.restore();
+  }
+  if (clipped) { c.restore(); }
+  c.restore();
+}
+
 // ---- p5 entry points ----
+let rbReady = false, rbInstant = false, rbT0 = -1;
+let rbMainCtx, rbFG, rbScratch, rbScr, rbReveal = null;
+
 // WEBPAGE: fixed 1920 px render; CSS scales the canvas to the window, so no repaint on resize.
 function rbLayout() {
   rbCw = RB_RENDER_W;
-  rbCh = Math.round(rbCw / RB_ASPECT);
+  rbCh = Math.round(rbCw * 9 / 16);   // exactly 1920 x 1080 as the brief asks (the drawing is 1.7 px taller than 16:9, so its last 2 px are cut off)
 }
-// WEBPAGE
+// WEBPAGE: moves the p5 canvas into the page and tells the CSS which palette is active
 function rbMountCanvas() {
   const mount = document.getElementById('art-mount');
-  if (mount) { mount.appendChild(rbCtx.canvas); }
+  if (mount) { mount.appendChild(drawingContext.canvas); }
   document.documentElement.setAttribute('data-theme', String(rbThemeIdx));
 }
-let rbGo = false;
+// WEBPAGE: the CSS fades the canvas in and the loading screen finishes when body has this class
+const rbMarkReady = () => document.body.classList.add('art-ready');
+// WEBPAGE: the landing page keeps #art-mount at opacity 0 until the visitor scrolls, so the animation
+// waits until the art is at least slightly visible; otherwise it would finish before anyone sees it.
+function rbArtSeen() {
+  const m = document.getElementById('art-mount');
+  if (!m || m.style.opacity === '') { return true; }
+  return parseFloat(m.style.opacity) > 0.12;
+}
+function rbWaitForArt() {
+  const timer = setInterval(() => {
+    if (!rbArtSeen()) { return; }
+    clearInterval(timer);
+    rbT0 = -1;   // the animation clock starts now
+    loop();
+  }, 150);
+}
+// The picture is painted on a hidden layer (rbFG). The screen shows it through a fading mask.
+function rbMakeLayers() {
+  const pd = pixelDensity(), w = Math.round(rbCw * pd), h = Math.round(rbCh * pd);
+  rbMainCtx = drawingContext;
+  rbFG = document.createElement('canvas');
+  rbScratch = document.createElement('canvas');
+  [rbFG, rbScratch].forEach(cv => { cv.width = w; cv.height = h; });
+  rbCtx = rbFG.getContext('2d');
+  rbCtx.setTransform(pd, 0, 0, pd, 0, 0);
+  rbScr = rbScratch.getContext('2d');
+}
+
+// ---- background fade-in ----
+// time at which the spot (x, y) starts to fade in. j = nearest ribbon sample.
+// Uses the same front as the ribbon animation, plus a delay with distance from the ribbon.
+function rbRevealStart(sys, wd, x, y, j) {
+  const A = rbAnim, c = sys.C[j], span = (sys.u1 - sys.u0) || 1;
+  const u = rbCl((j / (sys.n - 1) - sys.u0) / span, 0, 1);
+  const lag = rbCl(Math.hypot(x - c[0], y - c[1]) / RB_BG_LAGPX, 0, 1);
+  const wob = rbFbm2(x / 140, y / 140, rbSeed % 997) - 0.5;   // ragged front, no random stream used
+  const f = rbCl((1 - RB_BG_LAG) * rbFront(A, u, 0) + RB_BG_LAG * lag + 0.16 * wob, 0, 1);
+  const t = f * A.bgDur * (1 - RB_BG_FADE);
+  // spots under the ribbon must be fully visible by the time the ribbon starts painting
+  return rbInRibbon(sys, wd, x, y, RB_BG_RIBBON_PAD) ? Math.min(t, A.t0 - A.bgDur * RB_BG_FADE) : t;
+}
+// one start time per cell of the wave grid, plus a small canvas that holds the mask
+function rbBuildReveal(sys, wd) {
+  rbReveal = null;
+  if (rbInstant) return;   // instant rebuild (after a resize) has no fade-in, so no mask is needed
+  if (!RB_BG_ANIM || !RB_ANIM || !wvGrid) return;
+  const g = wvGrid, start = new Float32Array(g.gw * g.gh);
+  rbRepeat(g.gh, gy => {
+    for (let gx = 0; gx < g.gw; gx++) {
+      const k = gy * g.gw + gx, x = gx * WV_CELL - WV_PAD + WV_CELL / 2, y = gy * WV_CELL - WV_PAD + WV_CELL / 2;
+      start[k] = rbRevealStart(sys, wd, x, y, rbCl(g.own[k], 0, sys.n - 1));
+    }
+  });
+  const cv = document.createElement('canvas');
+  cv.width = g.gw; cv.height = g.gh;
+  const cx = cv.getContext('2d');
+  rbReveal = { start, cv, cx, img: cx.createImageData(g.gw, g.gh), fade: rbAnim.bgDur * RB_BG_FADE };
+}
+// sets the mask opacity for time t. returns true once every spot is fully visible
+function rbRevealUpdate(t) {
+  const R = rbReveal, d = R.img.data;
+  let done = true;
+  for (let k = 0; k < R.start.length; k++) {
+    const a = rbSm((t - R.start[k]) / R.fade);
+    d[k * 4 + 3] = a * 255;
+    if (a < 1) done = false;
+  }
+  R.cx.putImageData(R.img, 0, 0);
+  return done;
+}
+// puts the hidden layer on screen (through the mask while the background is still fading in)
+function rbShow(t) {
+  const m = rbMainCtx, done = rbReveal ? rbRevealUpdate(t) : true;
+  if (done) { m.drawImage(rbFG, 0, 0, rbCw, rbCh); return true; }
+  const s = rbScr, k = rbSC * pixelDensity(), g = wvGrid;
+  s.globalCompositeOperation = 'copy';
+  s.drawImage(rbFG, 0, 0);
+  s.globalCompositeOperation = 'destination-in';
+  s.imageSmoothingEnabled = true;
+  s.drawImage(rbReveal.cv, -WV_PAD * k, -WV_PAD * k, g.gw * WV_CELL * k, g.gh * WV_CELL * k);
+  m.fillStyle = rbRgba(RB_PAPER, 1);
+  m.fillRect(0, 0, rbCw, rbCh);
+  m.drawImage(rbScratch, 0, 0, rbCw, rbCh);
+  return false;
+}
+
 function setup() {
   rbLayout();
   createCanvas(rbCw, rbCh);
-  pixelDensity(1);
-  rbCtx = drawingContext;
+  pixelDensity(Math.min(RB_MAX_DPR, displayDensity()));
   rbApplyTheme(rbThemeIdx);
-  rbMountCanvas();
+  rbMountCanvas();   // WEBPAGE
   console.log('palette: ' + TH.name + '   seed: ' + rbSeed);
-  noLoop();
-  setTimeout(() => { rbGo = true; redraw(); }, 120);
 }
-function draw() {
-  if (!rbGo) return;
+// paints the static background and queues the ribbon, leaves and flowers
+// WEBPAGE: add ?timing to the page address (for example index.html?timing) to print how long each build step takes in the console.
+const RB_TIMING = /[?&]timing\b/.test(location.search);
+let rbLapT = 0;
+function rbLap(label) {
+  if (!RB_TIMING) return;
+  try { rbCtx.getImageData(0, 0, 1, 1); } catch (e) { /* ignore */ }   // makes the browser finish the drawing so the time is real
+  const t = performance.now();
+  console.log('build  ' + label.padEnd(12) + (t - rbLapT).toFixed(0) + ' ms');
+  rbLapT = t;
+}
+function rbRender() {
+  rbLapT = performance.now();
+  rbMakeLayers();
   rbRS = rbSeed * 7919 + 13;
   rbFluid = null;
+  wvGrid = null;
+  rbQ = []; rbQi = 0; rbLayerNo = 0; rbRecording = false; rbBlurNow = 0;
   rbSC = rbCw / RB_W;
   rbBL = rbSC * pixelDensity();
   const c = rbCtx;
@@ -1871,12 +2230,86 @@ function draw() {
   c.lineCap = 'round';
   c.lineJoin = 'round';
   rbTry('streaks', rbStreaks);
+  rbLap('streaks');
   const built = rbBuild(), sys = built.sys, wd = built.wd;
+  rbLap('ribbon shape');
   rbTry('background', () => rbBackground(sys, wd));
+  rbLap('background');
   rbIsolated('bg waves', 6, () => rbBgWaves(sys, wd));
+  rbLap('bg waves');
+  if (!WV_ON || !wvGrid) { wvBuildGrid(sys, wd); }
+  rbAnimSys = sys;
   rbTry('ribbon', () => rbPaintRibbon(sys, wd));
+  rbLap('ribbon');
   rbIsolated('leaves', 7, () => rbLeaves(sys, wd));
+  rbLap('leaves');
   c.restore();
-  document.body.classList.add('art-ready');
+  rbPlan();
+  rbTry('bg reveal', () => rbBuildReveal(sys, wd));
+  rbLap('reveal mask');
+  rbRS = (rbSeed * 1299709 + 31) | 0;   // the random stream used while painting the queue
 }
-// WEBPAGE: no windowResized()
+
+let rbWait = true;   // the first call to draw only paints the paper colour, so the page can show before the heavy build
+function draw() {
+  if (!rbReady) {
+    if (rbWait) {
+      rbWait = false;
+      background(RB_PAPER[0], RB_PAPER[1], RB_PAPER[2]);
+      noLoop();
+      setTimeout(loop, 80);              // build starts after the browser has painted the page
+      return;
+    }
+    rbRender();                          // this frame builds the scene
+    rbReady = true;
+    rbT0 = -1;
+    if (rbInstant || !RB_ANIM) { rbPlay(1e9, 1e9); rbShow(1e9); noLoop(); } else { rbShow(0); }
+    if (!rbInstant && RB_ANIM) { frameRate(RB_FPS); }   // WEBPAGE: lighter animation so the page can scroll while it plays
+    rbMarkReady();                       // WEBPAGE: build done, the painting starts to appear
+    rbAfterBuild();                      // WEBPAGE: tell the page that a (new) painting is ready
+    if (!rbInstant && RB_ANIM && !rbArtSeen()) { noLoop(); rbWaitForArt(); }   // WEBPAGE: hold the animation until the art can be seen
+    return;
+  }
+  if (rbT0 < 0) { rbT0 = millis(); }
+  const t = (millis() - rbT0) / 1000;
+  rbPlay(t, rbScrolling() ? RB_SCROLL_MS : RB_FRAME_MS);
+  const bgDone = rbShow(t);
+  if (rbQi >= rbQ.length && bgDone) { noLoop(); }
+}
+// WEBPAGE: no windowResized(). The canvas is always 1920 x 1080 and CSS scales it.
+
+// WEBPAGE: "Weave a new silk". Repaints only the artwork with a new seed and palette, without reloading the page.
+// The picture is made exactly as on a fresh visit (same code, new seed), and the animation plays again.
+let rbBusy = false;
+function rbAfterBuild() {
+  document.documentElement.setAttribute('data-theme', String(rbThemeIdx));   // the page colours follow the palette
+  document.body.classList.remove('art-weaving');
+  rbBusy = false;
+  window.dispatchEvent(new CustomEvent('art:ready'));
+}
+window.rbWeaveNew = function () {
+  if (rbBusy || !rbReady) { return false; }
+  rbBusy = true;
+  noLoop();                                      // stop the old animation
+  document.body.classList.add('art-weaving');
+  rbSeed = Math.floor(Math.random() * 1e6);
+  rbThemeIdx = RB_FORCE_THEME >= 0 ? RB_FORCE_THEME % RB_THEMES.length : Math.floor(Math.random() * RB_THEMES.length);
+  rbApplyTheme(rbThemeIdx);
+  rbReady = false; rbWait = false; rbInstant = false;
+  rbReveal = null; rbQ = []; rbQi = 0; rbT0 = -1;
+  console.log('new silk - palette: ' + TH.name + '   seed: ' + rbSeed);
+  setTimeout(loop, 60);                          // lets the page show the "weaving" state before the build starts
+  return true;
+};
+
+// WEBPAGE speed: p5 normally waits for the window "load" event, which only fires after every image on the page
+// (about 12 MB of PNG files) has been downloaded, and only then starts the build. Here p5 is started as soon as the
+// page structure is ready, so the painting is built while the images download. If this fails for any reason, p5
+// still starts by itself at "load" as before. The picture itself is not affected.
+(function rbEarlyStart() {
+  if (typeof p5 === 'undefined' || p5.instance || document.readyState === 'complete') return;
+  const start = () => {
+    try { if (!p5.instance) { new p5(); } } catch (e) { console.warn('early p5 start failed, waiting for load:', e); }
+  };
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', start, { once: true }); } else { start(); }
+})();
